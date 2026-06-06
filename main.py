@@ -179,10 +179,11 @@ async def main():
         task_instructions += f"""
     === GENERAL PLATFORM RULES ===
     1. Navigate to {target_url}
-    2. Look for any 'Sign In', 'Log In', or user icon buttons. Click them.
-    3. Enter the email '{email}' and password '{password}' in the corresponding login form inputs, then click 'Submit' or 'Login'.
-    4. Search the page dynamically to locate the target elements required to complete: '{task_goal}'.
-    5. Dynamically decide which elements to click, scroll, or input text into to progress towards the goal.
+    2. If the page is public and does not require signing in to complete the goal, skip steps 3 and 4 and proceed directly to step 5.
+    3. Look for any 'Sign In', 'Log In', or user icon buttons. Click them.
+    4. Enter the email '{email}' and password '{password}' in the corresponding login form inputs, then click 'Submit' or 'Login'.
+    5. Search the page dynamically to locate the target elements required to complete: '{task_goal}'.
+    6. Dynamically decide which elements to click, scroll, or input text into to progress towards the goal.
     """
 
     task_instructions += f"""
