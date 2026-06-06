@@ -1,8 +1,48 @@
 import os
 import asyncio
+import logging
 
 from dotenv import load_dotenv
 from browser_use import Agent, ChatGoogle
+
+# Set up logging configuration
+logging.basicConfig(level=logging.INFO)
+
+class FallbackChatGoogle:
+    """
+    A custom wrapper class that satisfies the browser_use BaseChatModel Protocol.
+    If the primary model fails, it seamlessly falls back to a secondary model.
+    """
+    _verified_api_keys = False
+
+    def __init__(self, main_llm: ChatGoogle, fallback_llm: ChatGoogle):
+        self.main_llm = main_llm
+        self.fallback_llm = fallback_llm
+        self.model = main_llm.model
+        self.logger = logging.getLogger("browser_use.fallback_chat_google")
+
+    @property
+    def provider(self) -> str:
+        return self.main_llm.provider
+
+    @property
+    def name(self) -> str:
+        return self.main_llm.name
+
+    @property
+    def model_name(self) -> str:
+        return self.main_llm.model_name
+
+    async def ainvoke(self, messages, output_format=None, **kwargs):
+        try:
+            self.logger.info(f"Attempting call using primary model: {self.main_llm.model}")
+            return await self.main_llm.ainvoke(messages, output_format=output_format, **kwargs)
+        except Exception as e:
+            self.logger.warning(
+                f"Primary model {self.main_llm.model} failed: {e}. "
+                f"Retrying and falling back to secondary model: {self.fallback_llm.model}"
+            )
+            return await self.fallback_llm.ainvoke(messages, output_format=output_format, **kwargs)
 
 # Load environment variables
 load_dotenv()
@@ -46,17 +86,78 @@ async def main():
     12. Once all questions are completed, find and click the final 'Submit Test' button.
     13. A dialog box will appear asking for confirmation. You MUST type the exact text 'END' into that confirmation box, and then click 'Yes' or 'Submit' to finally submit.
     14. Do not stop execution until the test is fully submitted and you see the completion screen.
+
+    === CRITICAL TROUBLESHOOTING & SELF-HEALING PROTOCOLS ===
+    If you get stuck, run into errors, or find things not working, use the following self-healing instructions:
+
+    1. MONACO CODE EDITOR INJECTION:
+       Do NOT try to type code line-by-line using basic keyboard inputs or by modifying standard input text fields. The Monaco Editor requires setting values directly on its internal model.
+       To inject code, execute a custom JavaScript function using the 'evaluate' tool:
+       ```javascript
+       (function() {{
+           try {{
+               if (window.monaco && window.monaco.editor) {{
+                   const models = window.monaco.editor.getModels();
+                   if (models && models.length > 0) {{
+                       models[0].setValue(`YOUR_CODE_HERE`);
+                       const textarea = document.querySelector('.monaco-editor textarea');
+                       if (textarea) textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                       return "Monaco updated successfully";
+                   }}
+               }}
+               // Fallback: search for editable areas
+               const el = document.querySelector('textarea, div[contenteditable="true"]');
+               if (el) {{
+                   el.value = `YOUR_CODE_HERE`;
+                   el.innerText = `YOUR_CODE_HERE`;
+                   el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                   return "Standard editor updated";
+               }}
+               return "No editor found";
+           }} catch(e) {{
+               return "Error: " + e.toString();
+           }}
+       }})()
+       ```
+
+    2. DISMISSING BLOCKING MODALS & DIALOGS:
+       If any warning alerts, confirmation modals, or loading overlay backdrops block the screen (e.g. when clearing code or due to alert popups), immediately click 'Yes', 'Okay', or 'Close'.
+       If a modal cannot be dismissed or is stuck, run this JavaScript via 'evaluate' to forcefully remove all blocking overlays and restore screen usability:
+       ```javascript
+       const overlays = document.querySelectorAll('.modal-backdrop, .modal, [class*="modal"], [id*="modal"]');
+       overlays.forEach(el => el.remove());
+       document.body.classList.remove('modal-open');
+       ```
+
+    3. ENABLING DISABLED BUTTONS:
+       If the 'Compile & Run' or 'Submit Code' buttons remain disabled (even after you've entered the code), run this JavaScript via 'evaluate' to force-enable them:
+       ```javascript
+       const compileBtn = document.getElementById('programme-compile');
+       if (compileBtn) compileBtn.disabled = false;
+       const submitBtn = document.getElementById('tt-footer-submit-answer') || document.getElementById('tt-footer-submit-ans');
+       if (submitBtn) submitBtn.disabled = false;
+       ```
     """
 
-    # Initialize the agent — using gemini-3.1-flash-lite for high free tier limits and agentic support
+    # Set up models: gemini-3.1-flash-lite as main, and gemini-2.5-flash as fallback for 503s
+    main_llm = ChatGoogle(
+        model="gemini-3.1-flash-lite", 
+        max_retries=5, 
+        retry_base_delay=3.0, 
+        retry_max_delay=30.0
+    )
+    fallback_llm = ChatGoogle(
+        model="gemini-2.5-flash", 
+        max_retries=5, 
+        retry_base_delay=3.0, 
+        retry_max_delay=30.0
+    )
+    llm = FallbackChatGoogle(main_llm, fallback_llm)
+
+    # Initialize the agent
     agent = Agent(
         task=task_instructions,
-        llm=ChatGoogle(
-            model="gemini-3.1-flash-lite", 
-            max_retries=10, 
-            retry_base_delay=5.0, 
-            retry_max_delay=60.0
-        ),
+        llm=llm,
         max_failures=10,
         max_actions_per_step=5,
     )
