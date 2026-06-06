@@ -1,4 +1,4 @@
-# 🤖 Examly Portal & Browser Automation Agent
+# 🤖 Browser Automation Agent
 
 A general-purpose, self-healing browser automation agent built on top of [browser-use](https://github.com/browser-use/browser-use). It is designed to navigate complex websites, solve captchas, mimic human interaction to bypass anti-bot detections, and dynamically request clarification from the user when stuck.
 
@@ -43,8 +43,8 @@ Ensure you have Python 3.13+ and [uv](https://github.com/astral-sh/uv) installed
 
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/sameerreddy789/Examly-Portal-Automation-Agent.git
-   cd Examly-Portal-Automation-Agent
+   git clone https://github.com/sameerreddy789/Browser_Automation.git
+   cd Browser_Automation
    ```
 
 2. **Sync Dependencies**:
