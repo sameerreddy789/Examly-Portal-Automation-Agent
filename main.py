@@ -38,9 +38,10 @@ async def main():
     7. The right side of the page will update. Click the 'Take Test' button.
     8. Click 'Agree and proceed' (or similar) to accept the conditions.
     9. WAIT for the test to fully load. 
-    10. Once the test starts, check the available sections. For each question:
+    10. Once the test starts, check the available sections. Notice the 'Section' dropdown at the top (e.g., 'Section: 1/2'). For each question:
         - If it is a Multiple Choice Question (MCQ): Read the question, evaluate the options, select the correct answer, and move to the next question.
-        - If it is a Coding (DSA) question: Read the entire problem statement. Formulate the optimal code solution, type your code carefully into the code editor area, run/verify if needed, and move to the next question.
+        - If it is a Coding (DSA) question: Read the entire problem statement, including the expected inputs and outputs. Try to get the OPTIMIZED code solution for the question, type your code carefully into the code editor area, and run/verify it.
+        - CRITICAL SECTION NAVIGATION: Once you complete a section, or if you are completely stuck and cannot solve the current question, you MUST click the 'Section' dropdown at the top of the page and select the next section.
     11. Proceed through all questions in all sections until the end.
     12. Once all questions are completed, find and click the final 'Submit Test' button.
     13. A dialog box will appear asking for confirmation. You MUST type the exact text 'END' into that confirmation box, and then click 'Yes' or 'Submit' to finally submit.
