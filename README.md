@@ -136,7 +136,7 @@ python run.py --url "https://example.com" --task "Do something"
 ### Agent Only
 ```powershell
 # Windows PowerShell (Unicode support)
-$env:PYTHONUTF8="1"; uv run python main.py
+$env:PYTHONIOENCODING="utf-8"; uv run python main.py
 ```
 
 ### Command Line Arguments
