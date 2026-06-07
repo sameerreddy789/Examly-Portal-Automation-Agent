@@ -25,7 +25,7 @@ from typing import Optional
 
 from google import genai
 
-logger = logger.getLogger("browser_use.visual_grounding")
+logger = logger.bind(name="browser_use.visual_grounding")
 
 # Gemini client (uses GOOGLE_API_KEY from environment automatically)
 _client = None

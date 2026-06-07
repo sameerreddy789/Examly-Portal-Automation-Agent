@@ -1,4 +1,4 @@
-from crawlee.playwright_crawler import PlaywrightCrawler, PlaywrightCrawlingContext
+from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
 from loguru import logger
 
 async def extract_page_data_crawlee(url: str, selector: str = "body") -> str:

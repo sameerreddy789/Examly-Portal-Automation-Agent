@@ -24,5 +24,6 @@ dependencies = [
     "taskiq-redis>=1.2.2",
     "loguru>=0.7.3",
     "mitmproxy>=12.2.3",
-    "crawlee>=1.7.2",
+    "crawlee[playwright]>=1.7.2",
+    "chromadb>=1.5.9",
 ]

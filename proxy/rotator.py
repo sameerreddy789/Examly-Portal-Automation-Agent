@@ -25,7 +25,7 @@ import os
 from urllib.parse import urlparse
 from typing import Optional
 
-logger = logger.getLogger("browser_use.proxy")
+logger = logger.bind(name="browser_use.proxy")
 
 
 class ProxyRotator:

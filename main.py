@@ -38,7 +38,7 @@ class FallbackChatGoogle:
         self.main_llm = main_llm
         self.fallback_llm = fallback_llm
         self.model = main_llm.model
-        self.logger = logger.getLogger("browser_use.fallback_chat_google")
+        self.logger = logger.bind(name="browser_use.fallback_chat_google")
 
     @property
     def provider(self) -> str:

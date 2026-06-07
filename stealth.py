@@ -15,6 +15,7 @@ Usage:
     html = stealth_http_get("https://example.com")
 """
 
+from typing import Optional
 from loguru import logger
 from playwright_stealth import Stealth
 
