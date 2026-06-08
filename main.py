@@ -68,8 +68,8 @@ controller = Controller()
 
 # Helper for synchronous blocking input in worker thread
 def sync_get_user_input(prompt: str) -> str:
-    print(f"\n\033[93m🤖 [AGENT CLARIFICATION NEEDED]: {prompt}\033[0m")
-    return input("👉 Your Response: ").strip()
+    print(f"\n\033[93m[AGENT CLARIFICATION NEEDED]: {prompt}\033[0m")
+    return input(">> Your Response: ").strip()
 
 @controller.action(
     description="Asks the user (Sir) a clarifying question in the terminal and waits for their input. "
@@ -262,8 +262,8 @@ async def pause_for_human_help(reason: str, browser_session: BrowserSession) -> 
                 return "No user response received (timed out). Continuing with best effort."
         else:
             # Fallback to terminal
-            print(f"\n\033[93m🤖 [HITL]: {reason}\033[0m")
-            response = await asyncio.to_thread(input, "👉 Your Response: ")
+            print(f"\n\033[93m[HITL]: {reason}\033[0m")
+            response = await asyncio.to_thread(input, ">> Your Response: ")
             return f"User responded: {response.strip()}"
     except Exception as e:
         logger.error(f"Error in pause_for_human_help: {e}")
@@ -285,6 +285,7 @@ async def main():
     parser.add_argument("--user-data-dir", default="./agent_profile", help="Path to save cookies/session persistently")
     parser.add_argument("--restore-session", type=str, default=None, help="Restore a previously saved session by ID")
     parser.add_argument("--no-stealth", action="store_true", default=False, help="Disable stealth/anti-detection mode")
+    parser.add_argument("--fresh-profile", action="store_true", default=False, help="Delete cached browser profile and start fresh")
     parser.add_argument("--queue", action="store_true", default=False, help="Dispatch task to Taskiq Redis worker queue instead of running locally")
     args, unknown = parser.parse_known_args()
     
@@ -387,7 +388,8 @@ async def main():
         - If it is a Coding (DSA) question: Read the entire problem statement, including expected inputs/outputs. Try to get the OPTIMIZED code solution, type/inject your code carefully into the code editor area, and run/verify it.
         - CRITICAL SECTION NAVIGATION: Once you complete a section, or if you are completely stuck and cannot solve the current question, you MUST click the 'Section' dropdown at the top of the page and select the next section.
     11. Proceed through all questions in all sections until the end.
-    12. Once completed, click 'Submit Test', type the exact text 'END' into the confirmation box, and submit.
+    12. CRITICAL DATA SAVING REQUIREMENT: For EVERY question you solve, immediately append the question text and your answer (or injected code) into a local file named 'answers_{task_goal.replace(' ', '_')}.txt' using the 'write_file' or 'append_to_file' tool. Number them clearly.
+    13. Once completed, click 'Submit Test', type the exact text 'END' into the confirmation box, and submit.
     """
     else:
         task_instructions += f"""
@@ -410,7 +412,11 @@ async def main():
     === CRITICAL TROUBLESHOOTING & SELF-HEALING PROTOCOLS ===
     If you get stuck, run into errors, or find things not working, use the following self-healing instructions:
 
-    1. MONACO CODE EDITOR INJECTION:
+    1. OPTIMIZED DSA CODE GENERATION:
+       Before injecting any code into the editor for a coding/DSA question, you MUST ensure your solution is highly optimized for time and space complexity (e.g., O(N) or O(N log N) instead of O(N^2) where applicable).
+       The code MUST be flawless, handle edge cases, and compile without errors. Double-check your logic before generating the final string.
+
+    2. MONACO CODE EDITOR INJECTION:
        Do NOT try to type code line-by-line using basic keyboard inputs or by modifying standard input text fields. The Monaco Editor requires setting values directly on its internal model.
        To inject code, execute a custom JavaScript function using the 'evaluate' tool:
        ```javascript
@@ -487,7 +493,7 @@ async def main():
         retry_max_delay=30.0
     )
     fallback_llm = ChatGoogle(
-        model="gemini-1.5-flash", 
+        model="gemma-4-31b", 
         max_retries=5, 
         retry_base_delay=3.0, 
         retry_max_delay=30.0
@@ -499,18 +505,25 @@ async def main():
     proxy_config = proxy_rotator.get_playwright_proxy_config() if proxy_rotator.is_enabled else None
     
     if proxy_config:
-        print(f"🔀 Proxy rotation enabled with {proxy_rotator.alive_count} proxies.")
+        print(f"[PROXY] Proxy rotation enabled with {proxy_rotator.alive_count} proxies.")
     else:
-        print("ℹ️  No proxies configured. Using direct connection.")
+        print("[PROXY] No proxies configured. Using direct connection.")
 
     # ── Initialize BrowserProfile with Stealth & Proxy ───────────────────────
     stealth_args = get_stealth_browser_args() if not args.no_stealth else ["--disable-blink-features=AutomationControlled"]
     
+    # Handle --fresh-profile: delete old cached profile to start clean
+    user_data_dir = args.user_data_dir
+    if args.fresh_profile and os.path.exists(user_data_dir):
+        import shutil
+        print(f"[CLEANUP] Deleting old browser profile at '{user_data_dir}'...")
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+        print("[CLEANUP] Fresh profile will be created.")
+    
     browser_profile_kwargs = dict(
         headless=args.headless,
-        user_data_dir=args.user_data_dir,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        disable_security=True,
+        user_data_dir=user_data_dir,
+        disable_security=False,
         args=stealth_args,
     )
     
@@ -545,16 +558,16 @@ async def main():
     print(f"\nFiring up the browser and starting task '{task_goal}' on '{target_url}'...")
     
     if not args.no_stealth:
-        print("🛡️  Stealth mode: ENABLED (anti-bot protections active)")
+        print("[STEALTH] Stealth mode: ENABLED (anti-bot protections active)")
     
     # Run the agent (either locally or via Taskiq worker queue)
     if args.queue:
         from tasks import broker, run_browser_agent_task
-        print("📦 Dispatching job to Taskiq Redis queue...")
+        print("[QUEUE] Dispatching job to Taskiq Redis queue...")
         await broker.startup()
         task = await run_browser_agent_task.kiq(task_instructions, target_url)
-        print(f"✅ Job enqueued successfully. Task ID: {task.task_id}")
-        print("💡 Ensure you have a Taskiq worker running: 'taskiq worker tasks:broker'")
+        print(f"[+] Job enqueued successfully. Task ID: {task.task_id}")
+        print("[!] Ensure you have a Taskiq worker running: 'taskiq worker tasks:broker'")
         await broker.shutdown()
         return
     else:
@@ -564,9 +577,12 @@ async def main():
     try:
         # Generate a session ID from the domain
         session_id = domain.replace(".", "_")
-        browser_context = await browser.get_browser_context()
-        await session_store.backup_session(browser_context, session_id)
-        print(f"💾 Session backed up as '{session_id}'")
+        browser_context = browser.browser_context
+        if browser_context:
+            await session_store.backup_session(browser_context, session_id)
+            print(f"[SESSION] Session backed up as '{session_id}'")
+        else:
+            logger.warning("Could not backup session: browser context not available")
     except Exception as e:
         logger.warning(f"Could not backup session: {e}")
     

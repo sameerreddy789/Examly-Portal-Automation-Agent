@@ -56,19 +56,11 @@ class SessionStore:
         self._redis = None
         self._using_redis = False
         
-        # Try to connect to Redis
-        try:
-            import redis
-            r = redis.Redis(host=redis_host, port=redis_port, db=0, socket_timeout=2)
-            r.ping()  # Test the connection
-            self._redis = r
-            self._using_redis = True
-            logger.info(f"✅ [SESSION STORE]: Connected to Redis at {redis_host}:{redis_port}")
-        except Exception as e:
-            logger.info(
-                f"ℹ️ [SESSION STORE]: Redis not available ({e}). "
-                f"Using local JSON file storage in {SESSIONS_DIR}/"
-            )
+        # Redis checking disabled to speed up startup times.
+        logger.info(
+            f"ℹ️ [SESSION STORE]: Redis checking disabled. "
+            f"Using local JSON file storage in {SESSIONS_DIR}/"
+        )
         
         # Ensure the local sessions directory exists (used as fallback or primary)
         os.makedirs(SESSIONS_DIR, exist_ok=True)

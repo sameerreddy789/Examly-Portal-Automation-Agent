@@ -137,11 +137,8 @@ def get_stealth_browser_args() -> list[str]:
     """
     return [
         "--disable-blink-features=AutomationControlled",
-        "--disable-features=IsolateOrigins,site-per-process",
         "--disable-infobars",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-background-timer-throttling",
         "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
     ]
