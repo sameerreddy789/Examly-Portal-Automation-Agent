@@ -22,3 +22,7 @@ pb_data/
 
 # Session storage
 sessions/
+
+# Answer Bank Data
+answer_bank*.json
+answers_*.txt

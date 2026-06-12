@@ -269,6 +269,99 @@ async def pause_for_human_help(reason: str, browser_session: BrowserSession) -> 
         logger.error(f"Error in pause_for_human_help: {e}")
         return f"Error: HITL pause failed: {str(e)}"
 
+# ── Dedicated Code Solver Actions ─────────────────────────────────────────────
+
+@controller.action(
+    description="Solves a DSA/coding question using a powerful dedicated AI model (gemini-2.5-flash with deep reasoning). "
+                "Pass the COMPLETE problem statement text including ALL sample inputs/outputs, constraints, input/output format, and any notes. "
+                "The more complete the problem description, the better the solution. "
+                "Returns clean C++ code ready to inject into the Monaco editor. "
+                "ALWAYS use this action for coding questions instead of trying to write code yourself — this solver is far more capable."
+)
+async def solve_coding_question(problem_statement: str, language: str = "cpp") -> str:
+    from code_solver import solve_problem
+    code = await solve_problem(problem_statement, language)
+    return f"INJECT THIS CODE INTO MONACO EDITOR:\n{code}"
+
+@controller.action(
+    description="Fixes a FAILING coding solution by analyzing test case failures. "
+                "Pass the original problem statement, your current code that fails, and the failure details "
+                "(expected output vs actual output, or error messages from the compile/run panel). "
+                "Returns a fixed version of the code. Use this when 'Compile & Run' shows test case failures."
+)
+async def fix_coding_solution(problem_statement: str, current_code: str, 
+                               failure_details: str, language: str = "cpp") -> str:
+    from code_solver import fix_solution
+    fixed_code = await fix_solution(problem_statement, current_code, failure_details, language)
+    return f"INJECT THIS FIXED CODE INTO MONACO EDITOR:\n{fixed_code}"
+
+@controller.action(
+    description="Last resort: re-solves a coding question from scratch with a DIFFERENT algorithmic approach. "
+                "Use this only after both solve_coding_question and fix_coding_solution have failed. "
+                "Pass the problem, the previous failing code, and ALL failure details accumulated so far."
+)
+async def retry_coding_solution(problem_statement: str, previous_code: str,
+                                 all_failure_details: str, language: str = "cpp") -> str:
+    from code_solver import solve_problem_retry
+    code = await solve_problem_retry(problem_statement, previous_code, all_failure_details, language)
+    return f"INJECT THIS NEW CODE INTO MONACO EDITOR:\n{code}"
+
+# ── Answer Bank Actions (Multi-Account Support) ──────────────────────────────
+
+# Global answer bank instance (initialized in main based on --mode)
+_answer_bank = None
+
+@controller.action(
+    description="Saves a question and its answer to the answer bank for future account runs. "
+                "Call this for EVERY question you encounter. Pass question_number (1-indexed), "
+                "section (1 or 2), question_type ('mcq' or 'coding'), full question_text, "
+                "and your answer (for MCQ) or code (for coding)."
+)
+async def save_to_answer_bank(question_number: int, section: int, question_type: str,
+                               question_text: str, answer: str = "", code: str = "") -> str:
+    global _answer_bank
+    if _answer_bank:
+        _answer_bank.save_question(question_number, section, question_type, question_text, answer, code)
+        return f"Saved Q{question_number} (Section {section}, {question_type}) to answer bank."
+    return "Answer bank not active. Continuing without saving."
+
+@controller.action(
+    description="Records the pass/fail result of a question after compiling or selecting an MCQ answer. "
+                "Pass question_number, section, passed (true/false), and any failure details "
+                "(e.g., 'Test case 2 failed: expected 5, got 3')."
+)
+async def record_question_result(question_number: int, section: int, 
+                                  passed: bool, details: str = "") -> str:
+    global _answer_bank
+    if _answer_bank:
+        _answer_bank.update_result(question_number, section, passed, details)
+        status = "PASSED" if passed else "FAILED"
+        return f"Recorded Q{question_number} result: {status}"
+    return "Answer bank not active."
+
+@controller.action(
+    description="Looks up a saved answer from a previous test run. Pass the first 200 characters "
+                "of the question text. In REPLAY mode, ALWAYS call this before solving any question. "
+                "If a corrected answer exists, use it directly instead of re-solving."
+)
+async def lookup_saved_answer(question_text_snippet: str) -> str:
+    global _answer_bank
+    if _answer_bank:
+        result = _answer_bank.get_answer_by_text(question_text_snippet)
+        if result:
+            q_type = result.get("type", "unknown")
+            q_num = result.get("number", "?")
+            if q_type == "coding":
+                code = result.get("final_code", "")
+                if code:
+                    return f"FOUND SAVED ANSWER (Coding Q{q_num}, match: {result.get('match_score', 0):.0%}):\n{code}"
+            else:
+                answer = result.get("final_answer", "")
+                if answer:
+                    return f"FOUND SAVED ANSWER (MCQ Q{q_num}, match: {result.get('match_score', 0):.0%}): {answer}"
+        return "No saved answer found for this question. Solve it normally."
+    return "Answer bank not active. Solve normally."
+
 # Load environment variables
 load_dotenv()
 
@@ -287,6 +380,10 @@ async def main():
     parser.add_argument("--no-stealth", action="store_true", default=False, help="Disable stealth/anti-detection mode")
     parser.add_argument("--fresh-profile", action="store_true", default=False, help="Delete cached browser profile and start fresh")
     parser.add_argument("--queue", action="store_true", default=False, help="Dispatch task to Taskiq Redis worker queue instead of running locally")
+    parser.add_argument("--mode", choices=["normal", "discovery", "replay"], default="normal",
+                        help="Run mode: normal (default), discovery (save Q&A for review), replay (use saved answers)")
+    parser.add_argument("--answer-bank", type=str, default=None,
+                        help="Path to answer bank JSON file for discovery/replay modes")
     args, unknown = parser.parse_known_args()
     
     # 1. Determine Target Website URL
@@ -360,6 +457,17 @@ async def main():
     # Check if the website is Examly to append specialized guidelines
     is_examly = "examly.io" in target_url.lower()
     
+    # Initialize answer bank if in discovery or replay mode
+    run_mode = getattr(args, 'mode', 'normal')
+    global _answer_bank
+    if run_mode in ("discovery", "replay"):
+        from answer_bank import AnswerBank
+        bank_test_name = (target_date or "test").replace(" ", "_") + "_Assessment"
+        bank_path = getattr(args, 'answer_bank', None) or f"answer_bank_{bank_test_name}.json"
+        _answer_bank = AnswerBank(bank_test_name, bank_path)
+        loaded_count = len(_answer_bank.questions)
+        print(f"[ANSWER BANK] Mode: {run_mode.upper()} | File: {bank_path} | Loaded: {loaded_count} questions")
+    
     # Base instructions based on user inputs
     task_instructions = f"""
     You are an automated browser assistant. Your goal is: '{task_goal}'
@@ -375,6 +483,7 @@ async def main():
     CRITICAL RULE: DO NOT open new tabs to search for answers. Tab switching is strictly tracked by the platform and will cause the test to auto-submit and fail. Do everything within the primary tab.
 
     1. Navigate to {target_url}
+    1b. LOGOUT CHECK: If you land on a dashboard (not the login page) and see a user name at the top-right corner that does NOT match '{email}', you MUST logout first. Click the user name dropdown at the top-right, click 'Logout', and wait for the login page to appear. Then proceed to step 2.
     2. On the login page, type the email '{email}' and click 'Next'.
     3. Wait for password page, type password '{password}' and click 'Login'.
     4. Once logged in, click 'Courses' in the sidebar. Find and open the course named exactly '{course_name}'.
@@ -386,18 +495,30 @@ async def main():
     10. Once the test starts, check the available sections. Notice the 'Section' dropdown at the top (e.g., 'Section: 1/2'). For each question:
         - If it is a Multiple Choice Question (MCQ): Read the question, evaluate the options, select the correct answer, and move to the next question.
         - If it is a Coding (DSA) question, follow this MANDATORY workflow:
-          a) Read the ENTIRE problem statement carefully, including ALL sample inputs/outputs and constraints.
-          b) THINK about the optimal algorithm BEFORE writing any code. Identify the problem pattern (see DSA ALGORITHM STRATEGY below).
-          c) Write the optimal solution using the correct data structure/algorithm — NEVER use brute-force if an efficient approach exists.
-          d) Inject the code into the Monaco editor.
-          e) Click 'Compile & Run' and check the output against ALL visible test cases.
-          f) CRITICAL VERIFICATION: If ANY test case fails, DO NOT submit the code. Instead, analyze the failure, fix the logic, re-inject, and compile again. Repeat up to 3 times.
-          g) Only click 'Submit Code' when ALL visible test cases pass.
-          h) If after 3 attempts the code still fails some test cases, submit your best attempt and move on — do not get stuck in an infinite loop.
+          a) Read the ENTIRE problem statement carefully, including ALL sample inputs/outputs, constraints, input format, and output format.
+          b) Copy the COMPLETE problem text — every detail matters. Include question title, description, examples, constraints, and I/O format.
+          c) IMPORTANT: Check the language dropdown in the editor and make sure 'C++' (or 'C++ 14' / 'C++ 17') is selected.
+          d) Call the 'solve_coding_question' action with the full problem text. Do NOT try to write code yourself — the dedicated solver uses a much more powerful AI model (gemini-2.5-flash).
+          e) Take the returned code and inject it into the Monaco editor using the Monaco injection JavaScript.
+          f) Click 'Compile & Run' and carefully read the output panel for ALL visible test cases.
+          g) VERIFICATION — If ALL test cases pass: Click 'Submit Code' immediately.
+          h) VERIFICATION — If ANY test case FAILS:
+             - Read the EXACT expected output and actual output from the results panel.
+             - Call 'fix_coding_solution' with: the problem statement, the current code, and the failure details (expected vs actual output for each failing test case).
+             - Inject the fixed code into Monaco and click 'Compile & Run' again.
+          i) If the fix STILL fails: Call 'retry_coding_solution' with the problem, the failing code, and ALL accumulated failure details. This will try a completely different algorithm.
+          j) After 3 total attempts (1 initial + 1 fix + 1 retry), submit your best attempt and move on — do not get stuck.
         - CRITICAL SECTION NAVIGATION: Before considering a test complete, you MUST look at the top of the page for a 'Section' dropdown. If you are in section 1 of 2, you MUST click that dropdown and navigate to section 2. DO NOT submit the test until you have explicitly verified there are no other sections to complete.
     11. Proceed through all questions in the current section. When you reach the last question of a section, you MUST check the section dropdown and switch to the next section if one exists.
-    12. CRITICAL DATA SAVING REQUIREMENT: For EVERY question you solve, immediately append the question text and your answer (or injected code) into a local file named 'answers_{task_goal.replace(' ', '_')}.txt' using the 'write_file' or 'append_to_file' tool. Number them clearly.
-    13. FINAL SUBMISSION GATE: You are FORBIDDEN from clicking 'Submit Test' until you have explicitly interacted with the section dropdown and verified that you have visited and completed EVERY section available. Once absolutely certain, click 'Submit Test', type the exact text 'END' into the confirmation box, and submit.
+    12. ANSWER BANK — SAVE EVERY QUESTION: For EVERY question, you MUST:
+        a) Call 'save_to_answer_bank' with: question_number, section, question_type ('mcq' or 'coding'), the FULL question_text, plus answer (for MCQ) or code (for coding).
+        b) After compiling/selecting, call 'record_question_result' with: question_number, section, passed (true/false), and failure details if any.
+    13. REPLAY MODE LOOKUP: Before solving any question, call 'lookup_saved_answer' with the first 200 characters of the question text. If a corrected answer is returned, USE IT DIRECTLY — inject the code or select the MCQ option without re-solving. Only solve from scratch if no saved answer is found.
+    14. FINAL SUBMISSION GATE: You are FORBIDDEN from clicking 'Submit Test' until you have explicitly verified that you have completed EVERY section. Once absolutely certain, click 'Submit Test'. When asked to type 'END', you MUST type exactly 'END' (all uppercase, no spaces) using the 'input' tool. If the input tool fails to enable the final submit button, execute this via 'evaluate':
+        ```javascript
+        const endInput = Array.from(document.querySelectorAll('input')).find(el => el.placeholder.includes('END') || el.type === 'text');
+        if (endInput) {{ endInput.value = 'END'; endInput.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+        ```
     """
     else:
         task_instructions += f"""
@@ -410,6 +531,17 @@ async def main():
     6. Dynamically decide which elements to click, scroll, or input text into to progress towards the goal.
     """
 
+    # Add replay mode emphasis if in replay mode
+    if run_mode == "replay":
+        task_instructions += """
+    === REPLAY MODE — CORRECTED ANSWERS AVAILABLE ===
+    You are running in REPLAY mode. Corrected answers from a previous run are loaded.
+    CRITICAL: For EVERY question, call 'lookup_saved_answer' FIRST before attempting to solve.
+    If a saved answer exists, USE IT DIRECTLY — do not re-solve. Your goal is 100% accuracy.
+    For coding questions with saved code: inject the saved code, Compile & Run to verify, then Submit.
+    For MCQs with saved answers: select the matching option directly.
+    """
+
     task_instructions += f"""
     === PERSISTENT WORKAROUNDS & LESSONS LEARNED ===
     Here are fixes and DOM selectors that were successfully used on previous runs on these sites:
@@ -420,40 +552,36 @@ async def main():
     === CRITICAL TROUBLESHOOTING & SELF-HEALING PROTOCOLS ===
     If you get stuck, run into errors, or find things not working, use the following self-healing instructions:
 
-    1. DSA ALGORITHM STRATEGY (MANDATORY — READ BEFORE EVERY CODING QUESTION):
-       You MUST identify the correct algorithm pattern BEFORE writing code. NEVER default to brute-force.
+    1. DSA CODE SOLVING (MANDATORY — USE THE DEDICATED SOLVER FOR ALL CODING QUESTIONS):
+       You MUST use 'solve_coding_question' for ALL coding questions. Do NOT write code yourself.
+       The dedicated solver uses gemini-2.5-flash (a much more powerful model) and produces optimal C++ solutions.
+       Default language is C++. Always include the FULL problem statement when calling the solver.
        
-       PATTERN RECOGNITION CHECKLIST:
-       - "Count subsequences / common subsequences" → Dynamic Programming (2D DP table, NOT brute-force enumeration)
-       - "Shortest path / minimum cost" → BFS, Dijkstra, or DP
-       - "Subarray sum / sliding window" → Two pointers or prefix sums
-       - "String matching / palindrome" → DP or KMP, NOT nested loops
-       - "Generate permutations/combinations" → Backtracking with pruning
-       - "Binary search on answer" → Monotonic check function + binary search
-       - "Graph traversal" → BFS/DFS with visited set
-       - "Interval scheduling" → Greedy with sorting
-       - "Stack-based" (next greater, valid parentheses) → Monotonic stack
-       - "Tree problems" → DFS/BFS recursion
-       - "Top K / heap" → Priority queue (min/max heap)
+       3-TIER SOLVING WORKFLOW:
+       TIER 1 — Initial solve: Call 'solve_coding_question' → inject code → Compile & Run
+       TIER 2 — Targeted fix: If test cases fail, call 'fix_coding_solution' with failure details → inject → Compile & Run
+       TIER 3 — Fresh approach: If still failing, call 'retry_coding_solution' with all failure info → inject → Compile & Run
+       After Tier 3, submit best attempt and move on.
        
-       COMPLEXITY REQUIREMENTS:
-       - Target O(N), O(N log N), or O(N*M) where N,M are input sizes
-       - REJECT any O(2^N) or O(N!) approach unless N ≤ 15 AND no DP alternative exists
-       - For string problems with constraints N ≤ 1000: O(N^2) DP is acceptable
-       - For N ≤ 10^5: must be O(N log N) or better
+       READING TEST RESULTS (CRITICAL):
+       After clicking 'Compile & Run', carefully read the output panel:
+       - Look for 'Passed', 'Failed', 'Accepted', 'Wrong Answer', 'Time Limit Exceeded', 'Runtime Error'
+       - For EACH failing test case, note the expected output AND actual output
+       - If you see 'Time Limit Exceeded': the algorithm is too slow, needs a fundamentally different approach
+       - If you see 'Runtime Error': likely array out of bounds, stack overflow, or division by zero
+       - If you see 'Wrong Answer': the logic or I/O format is incorrect
+       When calling fix or retry, include ALL this failure information — the more detail, the better the fix.
        
-       CODE QUALITY CHECKLIST (verify BEFORE injecting):
-       - [ ] Handles edge cases: empty input, single element, maximum constraints
-       - [ ] Correct I/O format: matches the expected output format EXACTLY (spaces, newlines)
-       - [ ] No buffer overflows: arrays sized appropriately for constraints
-       - [ ] No integer overflow: use long/long long for large multiplications
-       - [ ] Compiles cleanly: no missing includes, no syntax errors
+       LANGUAGE SELECTION:
+       - Default: C++ (C++14 or C++17)
+       - Before injecting code, ensure the language dropdown in the editor is set to C++
+       - If C++ is not available, use 'language="python"' parameter when calling the solver
        
-       VERIFICATION LOOP (MANDATORY):
+       VERIFICATION LOOP:
        After injecting code, you MUST click 'Compile & Run' and read the output.
-       - If ALL test cases show 'Passed' or correct output → Submit the code
-       - If ANY test case fails → Read the failing input/output, identify the bug, fix the algorithm, re-inject, and compile again
-       - Maximum 3 fix attempts per question. After 3 failures, submit best attempt and move on.
+       - If ALL test cases pass → Click 'Submit Code' immediately
+       - If ANY test case fails → Call the next tier of the solving workflow (fix → retry → submit best)
+       - NEVER try to manually edit or write code — always use the solver actions
 
     2. MONACO CODE EDITOR INJECTION:
        Do NOT try to type code line-by-line using basic keyboard inputs or by modifying standard input text fields. The Monaco Editor requires setting values directly on its internal model.
